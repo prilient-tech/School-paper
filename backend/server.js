@@ -63,6 +63,9 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // Static folder
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
+// Serve static files from the React app build directory
+app.use(express.static(path.join(__dirname, 'public')));
+
 // Health check
 app.get('/health', (req, res) => {
   res.status(200).json({
@@ -86,12 +89,9 @@ app.use('/api/dashboard', authMiddleware, dashboardRoutes);
 // Error handler
 app.use(errorHandler);
 
-// 404 handler
-app.use('*', (req, res) => {
-  res.status(404).json({
-    success: false,
-    message: 'Route not found'
-  });
+// Catch all handler: send back React's index.html file for any non-API routes
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 // Port
