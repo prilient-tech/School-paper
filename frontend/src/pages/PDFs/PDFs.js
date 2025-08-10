@@ -187,27 +187,41 @@ const PDFs = () => {
                   {pdf.uploadedBy?.name}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                  {(() => {
-                    // Try different possible field names for the PDF URL
-                    const pdfUrl = pdf.pdfUrl || pdf.filePath || `/uploads/${pdf.filename || pdf.fileName}`;
-                    const backendUrl = getBackendUrl();
-                    const fullUrl = backendUrl ? `${backendUrl}${pdfUrl}` : pdfUrl;
-                    
-                    console.log('PDF data:', pdf);
-                    console.log('PDF URL field:', pdfUrl);
-                    console.log('Full URL:', fullUrl);
-                    
-                    return (
-                      <a
-                        href={fullUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-indigo-600 hover:text-indigo-900 mr-4"
-                      >
-                        View
-                      </a>
-                    );
-                  })()}
+                                     {(() => {
+                     // Construct the PDF URL with correct backend URL
+                     const pdfPath = pdf.pdfUrl || pdf.filePath || `/uploads/${pdf.filename || pdf.fileName}`;
+                     const backendUrl = getBackendUrl();
+                     const fullPdfUrl = backendUrl ? `${backendUrl}${pdfPath}` : pdfPath;
+                     
+                     return (
+                       <a
+                         href={fullPdfUrl}
+                         target="_blank"
+                         rel="noopener noreferrer"
+                         className="text-indigo-600 hover:text-indigo-900 mr-4"
+                         onClick={(e) => {
+                           // Prevent default behavior and handle PDF viewing
+                           e.preventDefault();
+                           
+                           // Create a new window/tab with the PDF using full backend URL
+                           const newWindow = window.open(fullPdfUrl, '_blank');
+                           
+                           // If popup is blocked, show a message and offer alternative
+                           if (!newWindow || newWindow.closed || typeof newWindow.closed === 'undefined') {
+                             toast.error('Popup blocked! Opening PDF in same tab...', {
+                               duration: 3000,
+                             });
+                             // Fallback: open in same tab after a short delay
+                             setTimeout(() => {
+                               window.location.href = fullPdfUrl;
+                             }, 1000);
+                           }
+                         }}
+                       >
+                         View
+                       </a>
+                     );
+                   })()}
                 </td>
               </tr>
             ))}
