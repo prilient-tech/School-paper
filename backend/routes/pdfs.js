@@ -226,11 +226,17 @@ router.post('/', [
 
     logger.info(`PDF uploaded: ${title} by ${req.user.email}`);
 
+    // Send immediate response to prevent timeout
     res.status(201).json({
       success: true,
       data: pdf,
-      jobId: job.id
+      jobId: job.id,
+      message: 'PDF uploaded successfully. Questions are being generated in the background.',
+      status: 'processing'
     });
+
+    // Continue processing in background
+    logger.info(`Starting background processing for PDF: ${pdf._id}`);
   } catch (error) {
     logger.error('Upload PDF error:', error);
     res.status(500).json({ 
@@ -524,6 +530,40 @@ router.get('/:id/job-status', async (req, res) => {
     });
   } catch (error) {
     logger.error('Get job status error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Server error' 
+    });
+  }
+});
+
+// Get PDF processing status
+// @route   GET /api/pdfs/:id/status
+// @desc    Get PDF processing status
+// @access  Private
+router.get('/:id/status', requireTeacher, async (req, res) => {
+  try {
+    const pdf = await Pdf.findById(req.params.id);
+    if (!pdf) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'PDF not found' 
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        id: pdf._id,
+        status: pdf.processingStatus,
+        progress: pdf.progress || 0,
+        totalQuestions: pdf.totalQuestions || 0,
+        generatedQuestions: pdf.generatedQuestions || 0,
+        error: pdf.processingError || null
+      }
+    });
+  } catch (error) {
+    logger.error('Get PDF status error:', error);
     res.status(500).json({ 
       success: false, 
       message: 'Server error' 

@@ -60,6 +60,20 @@ app.use('/api/', limiter);
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
+// Increase timeout for long-running operations (PDF processing, AI generation)
+app.use((req, res, next) => {
+  // Set timeout to 10 minutes for PDF upload and processing
+  if (req.path.includes('/api/pdfs') || req.path.includes('/api/questions')) {
+    const timeout = parseInt(process.env.PDF_PROCESSING_TIMEOUT) || 10 * 60 * 1000;
+    req.setTimeout(timeout);
+    res.setTimeout(timeout);
+  } else {
+    req.setTimeout(30 * 1000); // 30 seconds for other routes
+    res.setTimeout(30 * 1000);
+  }
+  next();
+});
+
 // Static folder
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
@@ -112,6 +126,12 @@ connectDB().then(async () => {
       logger.info(`✅ Server running on port ${PORT}`);
       logger.info(`🌍 Environment: ${process.env.NODE_ENV}`);
     });
+
+    // Set server timeout to 10 minutes for long operations
+    const serverTimeout = parseInt(process.env.SERVER_TIMEOUT) || 10 * 60 * 1000;
+    server.timeout = serverTimeout; // 10 minutes
+    server.keepAliveTimeout = 65 * 1000; // 65 seconds
+    server.headersTimeout = 66 * 1000; // 66 seconds
 
     // Graceful shutdown
     process.on('SIGTERM', () => {
