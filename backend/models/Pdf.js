@@ -58,7 +58,9 @@ const pdfSchema = new mongoose.Schema({
   textChunks: [{
     content: String,
     pageNumber: Number,
-    chunkIndex: Number
+    chunkIndex: Number,
+    language: String,
+    languageConfidence: Number
   }],
   processingStatus: {
     type: String,
@@ -70,6 +72,17 @@ const pdfSchema = new mongoose.Schema({
   },
   totalPages: {
     type: Number,
+    default: 0
+  },
+  language: {
+    type: String,
+    enum: ['english', 'hindi', 'sanskrit', 'urdu', 'unknown'],
+    default: 'unknown'
+  },
+  languageConfidence: {
+    type: Number,
+    min: 0,
+    max: 100,
     default: 0
   },
   questionGenerationStatus: {

@@ -5,7 +5,6 @@ import { ChevronDownIcon, ChevronRightIcon, ChevronLeftIcon, ChevronDoubleLeftIc
 
 const Questions = () => {
   const [expandedQuestions, setExpandedQuestions] = useState(new Set());
-  const [showFullSourceText, setShowFullSourceText] = useState(new Set());
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
@@ -29,16 +28,6 @@ const Questions = () => {
       newExpanded.add(questionId);
     }
     setExpandedQuestions(newExpanded);
-  };
-
-  const toggleFullSourceText = (questionId) => {
-    const newShowFull = new Set(showFullSourceText);
-    if (newShowFull.has(questionId)) {
-      newShowFull.delete(questionId);
-    } else {
-      newShowFull.add(questionId);
-    }
-    setShowFullSourceText(newShowFull);
   };
 
   const renderQuestionOptions = (question) => {
@@ -119,26 +108,6 @@ const Questions = () => {
                 )}
               </button>
             )}
-            
-            {/* Show/Hide Source Text Button */}
-            {question.sourceText && (
-              <button
-                onClick={() => toggleQuestionExpansion(question._id)}
-                className="mt-1 flex items-center text-xs text-green-600 hover:text-green-800"
-              >
-                {isExpanded ? (
-                  <>
-                    <ChevronDownIcon className="h-3 w-3 mr-1" />
-                    Hide source text
-                  </>
-                ) : (
-                  <>
-                    <ChevronRightIcon className="h-3 w-3 mr-1" />
-                    Show source text
-                  </>
-                )}
-              </button>
-            )}
           </div>
         </div>
         
@@ -146,31 +115,6 @@ const Questions = () => {
           <div className="space-y-3">
             {/* Question Options */}
             {renderQuestionOptions(question)}
-            
-            {/* Source Text Preview */}
-            {question.sourceText && (
-              <div className="mt-3 pl-4 border-l-2 border-green-200">
-                <h4 className="text-sm font-medium text-green-700 mb-2">Source Content:</h4>
-                <div className="p-3 bg-green-50 border border-green-200 rounded-md">
-                  <p className="text-sm text-green-800 leading-relaxed">
-                    {showFullSourceText.has(question._id) 
-                      ? question.sourceText
-                      : question.sourceText.length > 300 
-                        ? `${question.sourceText.substring(0, 300)}...` 
-                        : question.sourceText
-                    }
-                  </p>
-                  {question.sourceText.length > 300 && (
-                    <button 
-                      onClick={() => toggleFullSourceText(question._id)}
-                      className="mt-2 text-xs text-green-600 hover:text-green-800"
-                    >
-                      {showFullSourceText.has(question._id) ? 'Show less' : 'Show full content'}
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
           </div>
         )}
       </div>

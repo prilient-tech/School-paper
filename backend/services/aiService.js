@@ -1,11 +1,12 @@
 const OpenAI = require('openai');
 const logger = require('../utils/logger');
+const { clear } = require('winston');
 
 class AIService {
   constructor() {
     const apiKey = process.env.OPENAI_API_KEY;
 
-    console.log('Initializing AI Service with OpenAI API Key:', apiKey)
+    console.log('Initializing Multi-Language AI Service with OpenAI API Key:', apiKey);
     if (!apiKey) {
       logger.warn('OpenAI API key not configured. AI features will be disabled.');
       this.openai = null;
@@ -14,9 +15,55 @@ class AIService {
         apiKey: apiKey
       });
     }
+
+    // Language-specific model configurations
+    this.languageModels = {
+      english: {
+        provider: 'openai',
+        model: 'gpt-5',
+        maxTokens: 4000,
+        temperature: 0.3
+      },
+      hindi: {
+        provider: 'huggingface',
+        model: 'Llama-3-Nanda-10B-Chat',
+        maxTokens: 2000,
+        temperature: 0.7
+      },
+      sanskrit: {
+        provider: 'huggingface',
+        model: 'ByT5-Sanskrit',
+        maxTokens: 2000,
+        temperature: 0.7
+      },
+      urdu: {
+        provider: 'huggingface',
+        model: 'Paramanu',
+        maxTokens: 2000,
+        temperature: 0.7
+      }
+    };
   }
 
-  // Generate questions from text content
+  // Get language-specific model configuration
+  getModelConfig(language) {
+    const lang = language.toLowerCase();
+    return this.languageModels[lang] || this.languageModels.english;
+  }
+
+  // Get language-specific instructions
+  getLanguageInstructions(language) {
+    const lang = language.toLowerCase();
+    const instructions = {
+      english: 'You are a CBSE question paper creator. Respond with ONLY valid JSON arrays. No explanations or other text.',
+      hindi: 'आप एक CBSE प्रश्न पत्र निर्माता हैं। केवल वैध JSON arrays के साथ जवाब दें। कोई स्पष्टीकरण या अन्य टेक्स्ट नहीं।',
+      sanskrit: 'त्वं CBSE प्रश्नपत्रस्य निर्माता असि। केवलं वैध JSON arrays सह उत्तरं ददातु। न कोऽपि स्पष्टीकरणः अन्यः वा पाठः।',
+      urdu: 'آپ ایک CBSE سوالیہ پیپر بنانے والے ہیں۔ صرف درست JSON arrays کے ساتھ جواب دیں۔ کوئی وضاحت یا دوسرا متن نہیں۔'
+    };
+    return instructions[lang] || instructions.english;
+  }
+
+  // Generate questions from text content with language support
   async generateQuestions(content, options = {}) {
     try {
       const {
@@ -25,11 +72,14 @@ class AIService {
         topic = 'General',
         questionTypes = ['mcq', 'short_answer', 'long_answer'],
         difficulty = 'medium',
-        count = 5
+        count = 5,
+        language = 'english'
       } = options;
 
+      logger.info(`Generating questions in ${language} language for ${subject} - ${chapter}`);
+
       // Clean and chunk the content
-      const cleanedContent = this.cleanContent(content);
+      const cleanedContent = this.cleanContent(content, language);
       const chunks = this.chunkContent(cleanedContent, 2000);
 
       const questions = [];
@@ -42,7 +92,8 @@ class AIService {
           topic,
           questionTypes,
           difficulty,
-          Math.ceil(count / chunks.length)
+          Math.ceil(count / chunks.length),
+          language
         );
         questions.push(...chunkQuestions);
       }
@@ -58,434 +109,380 @@ class AIService {
     }
   }
 
-  // Generate questions from a single chunk
-  async generateQuestionsFromChunk(chunk, subject, chapter, topic, questionTypes, difficulty, count) {
-    if (!this.openai) {
+  // Generate questions from a single chunk with language support
+  async generateQuestionsFromChunk(chunk, subject, chapter, topic, questionTypes, difficulty, count, language = 'english') {
+    const modelConfig = this.getModelConfig(language);
+    
+    if (!this.openai && modelConfig.provider === 'openai') {
       logger.warn('OpenAI not configured. Generating sample questions instead.');
-      return this.generateSampleQuestions(chunk, subject, chapter, topic, questionTypes, difficulty, count);
+      return this.generateSampleQuestions(chunk, subject, chapter, topic, questionTypes, difficulty, count, language);
     }
 
     // Validate content quality
-    if (!this.isValidContent(chunk)) {
+    if (!this.isValidContent(chunk, language)) {
       logger.warn('Content quality too low, generating sample questions instead.');
-      return this.generateSampleQuestions(chunk, subject, chapter, topic, questionTypes, difficulty, count);
+      return this.generateSampleQuestions(chunk, subject, chapter, topic, questionTypes, difficulty, count, language);
     }
 
-    const prompt = this.buildQuestionPrompt(chunk, subject, chapter, topic, questionTypes, difficulty, count);
+    const prompt = this.buildQuestionPrompt(chunk, subject, chapter, topic, questionTypes, difficulty, count, language);
 
     try {
-      const completion = await this.openai.chat.completions.create({
-        model: 'gpt-4-turbo',
+      if (modelConfig.provider === 'openai') {
+        return await this.generateWithOpenAI(prompt, modelConfig, language);
+      } else {
+        return await this.generateWithHuggingFace(prompt, modelConfig, language);
+      }
+    } catch (error) {
+      logger.error(`Error generating questions with ${modelConfig.provider}:`, error);
+      logger.warn('Falling back to sample questions');
+      return this.generateSampleQuestions(chunk, subject, chapter, topic, questionTypes, difficulty, count, language);
+    }
+  }
+
+  // Generate questions using OpenAI
+  async generateWithOpenAI(prompt, modelConfig, language) {
+    const requestConfig = {
+      model: modelConfig.model,
         messages: [
           {
             role: 'system',
-            content: 'You are a CBSE question paper creator. Respond with ONLY valid JSON arrays. No explanations or other text.'
+          content: this.getLanguageInstructions(language)
           },
           {
             role: 'user',
             content: prompt
           }
         ],
-        temperature: 0.3, // Lower temperature for more consistent JSON
-        max_tokens: 2000
-      });
-
-      const response = completion.choices[0].message.content;
-      const parsedQuestions = this.parseQuestionsFromResponse(response, questionTypes);
-      
-      // If parsing failed, generate sample questions
-      if (!parsedQuestions || parsedQuestions.length === 0) {
-        logger.warn('AI response parsing failed, falling back to sample questions');
-        return this.generateSampleQuestions(chunk, subject, chapter, topic, questionTypes, difficulty, count);
-      }
-      
-      return parsedQuestions;
-    } catch (error) {
-      logger.error('OpenAI API error:', error);
-      logger.warn('Falling back to sample questions due to API error');
-      return this.generateSampleQuestions(chunk, subject, chapter, topic, questionTypes, difficulty, count);
-    }
-  }
-
-  // Build the prompt for question generation
-  buildQuestionPrompt(content, subject, chapter, topic, questionTypes, difficulty, count) {
-    const questionTypeMap = {
-      mcq: 'Multiple Choice Questions',
-      short_answer: 'Short Answer Questions',
-      long_answer: 'Long Answer Questions',
-      true_false: 'True/False Questions',
-      fill_blank: 'Fill in the Blank Questions'
+      max_completion_tokens: modelConfig.maxTokens
     };
 
-    const selectedTypes = questionTypes.map(type => questionTypeMap[type]).join(', ');
+    // Only add temperature for models that support it (not GPT-5)
+    if (modelConfig.model !== 'gpt-5' && modelConfig.temperature !== undefined) {
+      requestConfig.temperature = modelConfig.temperature;
+    }
 
-    return `Generate ${count} questions based on this content for ${subject} - ${chapter}.
+    const completion = await this.openai.chat.completions.create(requestConfig);
 
-IMPORTANT: Generate a mix of different question types: ${selectedTypes}
+      const response = completion.choices[0].message.content;
+    return this.parseQuestionsFromResponse(response, ['mcq', 'short_answer', 'long_answer'], language);
+  }
 
-CRITICAL: Respond with ONLY a JSON array. No explanations, no markdown, no other text.
+  // Generate questions using HuggingFace (placeholder for future implementation)
+  async generateWithHuggingFace(prompt, modelConfig, language) {
+    logger.info(`Using HuggingFace model: ${modelConfig.model} for ${language}`);
+    
+    // For now, return sample questions as HuggingFace integration requires additional setup
+    // TODO: Implement HuggingFace API integration
+    logger.warn('HuggingFace integration not yet implemented, using sample questions');
+    return this.generateSampleQuestions('sample content', 'General', 'General', 'General', ['mcq', 'short_answer'], 'medium', 5, language);
+  }
+
+  // Build question prompt with language support
+  buildQuestionPrompt(content, subject, chapter, topic, questionTypes, difficulty, count, language = 'english') {
+    const lang = language.toLowerCase();
+    
+    const prompts = {
+      english: `Generate ${count} ${difficulty} level questions from the following content for CBSE ${subject} - Chapter ${chapter} (${topic}).
 
 Content: ${content}
 
-Return exactly this format with different question types:
-[
-  {"question":"What is the main topic?","type":"mcq","difficulty":"medium","topic":"${topic}","options":[{"text":"Option A","isCorrect":true},{"text":"Option B","isCorrect":false},{"text":"Option C","isCorrect":false},{"text":"Option D","isCorrect":false}],"correctAnswer":"Option A","explanation":"Explanation here","marks":1},
-  {"question":"Explain the key concept briefly.","type":"short_answer","difficulty":"medium","topic":"${topic}","correctAnswer":"Brief explanation here","explanation":"Detailed explanation","marks":2},
-  {"question":"Is this statement true or false?","type":"true_false","difficulty":"medium","topic":"${topic}","options":[{"text":"True","isCorrect":true},{"text":"False","isCorrect":false}],"correctAnswer":"True","explanation":"Explanation here","marks":1}
-]
+Question Types: ${questionTypes.join(', ')}
 
-Rules:
-- JSON only, no other text
-- Generate a mix of question types: ${selectedTypes}
-- For MCQ: 4 options, one correct
-- For True/False: options "True"/"False"
-- For short_answer/long_answer/fill_blank: use correctAnswer field, no options
-- Use CBSE style language
-- Keep vocabulary simple and appropriate for school level
-- IMPORTANT: Make questions specific to the actual content provided, not generic
-- Reference specific terms, concepts, or examples from the content
-- Avoid generic phrases like "the content" or "this material"`;
+Respond with ONLY a valid JSON array of questions. Each question should have:
+- question: The question text
+- type: One of ${questionTypes.join(', ')}
+- difficulty: ${difficulty}
+- topic: ${topic}
+- options: Array of 4 options (for MCQ only)
+- correctAnswer: The correct answer
+- explanation: Brief explanation (optional)
+
+Example format:
+[{"question": "...", "type": "mcq", "difficulty": "${difficulty}", "topic": "${topic}", "options": ["...", "...", "...", "..."], "correctAnswer": "...", "explanation": "..."}]`,
+
+      hindi: `निम्नलिखित सामग्री से CBSE ${subject} - अध्याय ${chapter} (${topic}) के लिए ${count} ${difficulty} स्तर के प्रश्न उत्पन्न करें।
+
+सामग्री: ${content}
+
+प्रश्न प्रकार: ${questionTypes.join(', ')}
+
+केवल प्रश्नों के वैध JSON array के साथ जवाब दें। प्रत्येक प्रश्न में होना चाहिए:
+- question: प्रश्न का पाठ
+- type: ${questionTypes.join(', ')} में से एक
+- difficulty: ${difficulty}
+- topic: ${topic}
+- options: 4 विकल्पों का array (केवल MCQ के लिए)
+- correctAnswer: सही उत्तर
+- explanation: संक्षिप्त स्पष्टीकरण (वैकल्पिक)`,
+
+      sanskrit: `निम्नलिखित सामग्रीतः CBSE ${subject} - अध्याय ${chapter} (${topic}) कृते ${count} ${difficulty} स्तरस्य प्रश्नान् उत्पादयतु।
+
+सामग्री: ${content}
+
+प्रश्न प्रकाराः ${questionTypes.join(', ')}
+
+केवलं प्रश्नानां वैध JSON array सह उत्तरं ददातु। प्रत्येक प्रश्ने भवेत्:
+- question: प्रश्नस्य पाठः
+- type: ${questionTypes.join(', ')} मध्ये एकः
+- difficulty: ${difficulty}
+- topic: ${topic}
+- options: 4 विकल्पानां array (केवलं MCQ कृते)
+- correctAnswer: सत्यम् उत्तरम्
+- explanation: संक्षिप्तं स्पष्टीकरणम् (वैकल्पिकम्)`,
+
+      urdu: `مندرجہ ذیل مواد سے CBSE ${subject} - باب ${chapter} (${topic}) کے لیے ${count} ${difficulty} سطح کے سوالات تیار کریں۔
+
+مواد: ${content}
+
+سوال کی اقسام: ${questionTypes.join(', ')}
+
+صرف سوالات کے درست JSON array کے ساتھ جواب دیں۔ ہر سوال میں ہونا چاہیے:
+- question: سوال کا متن
+- type: ${questionTypes.join(', ')} میں سے ایک
+- difficulty: ${difficulty}
+- topic: ${topic}
+- options: 4 اختیارات کا array (صرف MCQ کے لیے)
+- correctAnswer: درست جواب
+- explanation: مختصر وضاحت (اختیاری)`
+    };
+
+    return prompts[lang] || prompts.english;
   }
 
-  // Validate content quality
-  isValidContent(content) {
-    if (!content || content.length < 50) {
-      return false;
-    }
-
-    // Check for meaningful words (not just random characters)
-    const words = content.split(/\s+/).filter(word => word.length > 2);
-    const meaningfulWords = words.filter(word => {
-      // Check if word contains actual letters/characters
-      const hasLetters = /[a-zA-Z]/.test(word);
-      const notJustNumbers = !/^\d+$/.test(word);
-      const notJustSymbols = !/^[^\w]+$/.test(word);
-      return hasLetters && notJustNumbers && notJustSymbols;
-    });
-
-    // If less than 30% of words are meaningful, content is poor
-    const meaningfulPercentage = (meaningfulWords.length / words.length) * 100;
-    return meaningfulPercentage > 30;
-  }
-
-  // Parse questions from AI response
-  parseQuestionsFromResponse(response, questionTypes) {
+  // Parse questions from AI response with language support
+  parseQuestionsFromResponse(response, questionTypes, language = 'english') {
     try {
-      logger.info('Attempting to parse AI response. Response length:', response.length);
-      logger.info('Response preview:', response.substring(0, 500));
+      // Clean the response
+      const cleanedResponse = this.cleanJSONString(response);
       
-      // Strategy 1: Try simple JSON parsing first
-      let questions = this.trySimpleJSONParse(response);
+      // Try to parse as JSON
+      let questions = JSON.parse(cleanedResponse);
       
-      // Strategy 2: Try to extract and clean JSON
-      if (!questions || questions.length === 0) {
-        questions = this.tryExtractJSON(response);
-      }
-      
-      // Strategy 3: Try to parse as structured text
-      if (!questions || questions.length === 0) {
-        questions = this.tryParseStructuredText(response, questionTypes);
-      }
-      
-      // Strategy 4: Last resort - generate sample questions
-      if (!questions || questions.length === 0) {
-        logger.error('All parsing strategies failed, generating sample questions');
-        return this.generateSampleQuestions('', 'General', 'General', 'General', questionTypes, 'medium', 3);
-      }
-
-      // Ensure questions is an array
       if (!Array.isArray(questions)) {
-        questions = [questions];
+        logger.warn('AI response is not an array, attempting to extract array');
+        questions = this.extractArrayFromResponse(cleanedResponse);
       }
 
-      // Validate and clean questions
+      if (!questions || questions.length === 0) {
+        logger.warn('No questions found in AI response');
+        return [];
+      }
+
+      // Validate and clean each question
       const validQuestions = questions
-        .filter(q => q && this.validateQuestion(q, questionTypes))
-        .map(q => this.cleanQuestion(q));
+        .filter(q => this.isValidQuestion(q, questionTypes))
+        .map(q => this.cleanQuestion(q, language));
 
-      logger.info(`Successfully parsed ${validQuestions.length} questions`);
+      logger.info(`Successfully parsed ${validQuestions.length} questions from AI response`);
       return validQuestions;
+
     } catch (error) {
-      logger.error('Question parsing error:', error);
-      logger.error('Response that failed to parse:', response);
-      // Return sample questions as fallback
-      return this.generateSampleQuestions('', 'General', 'General', 'General', questionTypes, 'medium', 3);
+      logger.error('Error parsing AI response:', error);
+      logger.debug('Raw response:', response);
+      return [];
     }
   }
 
-  // Try simple JSON parsing
-  trySimpleJSONParse(response) {
-    try {
-      // Remove any leading/trailing whitespace and try direct parse
-      const cleaned = response.trim();
-      const parsed = JSON.parse(cleaned);
-      
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        logger.info('Simple JSON parse successful');
-        return parsed;
-      }
-    } catch (e) {
-      logger.warn('Simple JSON parse failed');
-    }
-    return null;
+  // Clean JSON string while preserving language characters
+  cleanJSONString(jsonString) {
+    // Remove control characters but preserve language characters
+    return jsonString
+      .replace(/[\x00-\x1F\x7F]/g, '')
+      .trim()
+      .replace(/^```json\s*/, '')
+      .replace(/\s*```$/, '');
   }
 
-  // Try to extract JSON from response
-  tryExtractJSON(response) {
+  // Extract array from response if it's wrapped in other text
+  extractArrayFromResponse(response) {
     try {
-      // Look for JSON array pattern
+      // Look for array patterns
       const arrayMatch = response.match(/\[[\s\S]*\]/);
       if (arrayMatch) {
-        const jsonString = arrayMatch[0];
-        const cleaned = this.cleanJSONString(jsonString);
-        const parsed = JSON.parse(cleaned);
-        
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          logger.info('JSON extraction successful');
-          return parsed;
-        }
+        return JSON.parse(arrayMatch[0]);
       }
       
-      // Look for individual objects
-      const objectMatches = response.match(/\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g);
-      if (objectMatches && objectMatches.length > 0) {
-        const questions = [];
-        for (const match of objectMatches) {
-          try {
-            const cleaned = this.cleanJSONString(match);
-            const question = JSON.parse(cleaned);
-            if (question && typeof question === 'object' && question.question) {
-              questions.push(question);
-            }
-          } catch (e) {
-            // Skip invalid objects
-          }
-        }
-        if (questions.length > 0) {
-          logger.info('Individual object extraction successful');
-          return questions;
-        }
+      // Look for JSON object patterns
+      const objectMatch = response.match(/\{[\s\S]*\}/);
+      if (objectMatch) {
+        const obj = JSON.parse(objectMatch[0]);
+        return obj.questions || obj.data || [obj];
       }
-    } catch (e) {
-      logger.warn('JSON extraction failed:', e.message);
+      
+      return null;
+    } catch (error) {
+      logger.error('Error extracting array from response:', error);
+      return null;
     }
-    return null;
-  }
-
-  // Try to parse structured text
-  tryParseStructuredText(response, questionTypes) {
-    try {
-      const questions = [];
-      const lines = response.split('\n');
-      let currentQuestion = null;
-
-      for (const line of lines) {
-        const trimmedLine = line.trim();
-        
-        // Skip empty lines
-        if (!trimmedLine) continue;
-        
-        // Check for question start
-        if (trimmedLine.match(/^\d+\./) || trimmedLine.match(/^Q\d+\./) || trimmedLine.match(/^Question\s+\d+/)) {
-          // Save previous question
-          if (currentQuestion && currentQuestion.question) {
-            questions.push(currentQuestion);
-          }
-          
-          // Start new question
-          currentQuestion = {
-            question: trimmedLine.replace(/^\d+\.\s*/, '').replace(/^Q\d+\.\s*/, '').replace(/^Question\s+\d+\.?\s*/, ''),
-            type: questionTypes[0] || 'mcq',
-            difficulty: 'medium',
-            topic: 'General',
-            options: [],
-            correctAnswer: '',
-            explanation: '',
-            marks: 1
-          };
-        } 
-        // Check for options
-        else if (currentQuestion && trimmedLine.match(/^[A-D][\.\)]\s/)) {
-          const optionText = trimmedLine.replace(/^[A-D][\.\)]\s*/, '');
-          currentQuestion.options.push({
-            text: optionText,
-            isCorrect: false
-          });
-        }
-        // Check for correct answer
-        else if (currentQuestion && (trimmedLine.toLowerCase().includes('correct') || trimmedLine.toLowerCase().includes('answer'))) {
-          currentQuestion.correctAnswer = trimmedLine;
-        }
-        // Check for explanation
-        else if (currentQuestion && (trimmedLine.toLowerCase().includes('explanation') || trimmedLine.toLowerCase().includes('reason'))) {
-          currentQuestion.explanation = trimmedLine;
-        }
-        // Append to question text if it's substantial
-        else if (currentQuestion && trimmedLine.length > 10 && !trimmedLine.startsWith('#')) {
-          currentQuestion.question += ' ' + trimmedLine;
-        }
-      }
-      
-      // Add the last question
-      if (currentQuestion && currentQuestion.question) {
-        questions.push(currentQuestion);
-      }
-      
-      // Set default correct answer for MCQ questions
-      questions.forEach(q => {
-        if (q.options && q.options.length > 0 && !q.correctAnswer) {
-          q.options[0].isCorrect = true;
-          q.correctAnswer = q.options[0].text;
-        }
-      });
-      
-      if (questions.length > 0) {
-        logger.info('Structured text parsing successful');
-        return questions;
-      }
-    } catch (e) {
-      logger.warn('Structured text parsing failed:', e.message);
-    }
-    return null;
-  }
-
-
-
-  // Clean JSON string
-  cleanJSONString(jsonString) {
-    return jsonString
-      .replace(/\\n/g, ' ')           // Replace escaped newlines with spaces
-      .replace(/\\r/g, ' ')           // Replace escaped carriage returns
-      .replace(/\\t/g, ' ')           // Replace escaped tabs
-      .replace(/\\"/g, '"')           // Fix escaped quotes
-      .replace(/\\\\/g, '\\')         // Fix double backslashes
-      .replace(/\n/g, ' ')            // Remove actual newlines
-      .replace(/\r/g, ' ')            // Remove carriage returns
-      .replace(/\t/g, ' ')            // Remove tabs
-      .replace(/\s+/g, ' ')           // Normalize whitespace
-      .replace(/,\s*]/g, ']')         // Remove trailing commas
-      .replace(/,\s*}/g, '}')         // Remove trailing commas in objects
-      .replace(/[^\x20-\x7E]/g, '')   // Remove non-printable characters
-      .trim();
-  }
-
-  // Check if question has valid structure
-  isValidQuestionStructure(question) {
-    return question && 
-           question.question && 
-           question.question.length > 10 &&
-           question.type;
   }
 
   // Validate question structure
-  validateQuestion(question, allowedTypes) {
-    const requiredFields = ['question', 'type', 'difficulty', 'topic'];
-    const hasRequiredFields = requiredFields.every(field => question[field]);
-
-    const validType = allowedTypes.includes(question.type);
-    const validDifficulty = ['easy', 'medium', 'hard'].includes(question.difficulty);
-
-    // Validate MCQ options
-    if (question.type === 'mcq') {
-      const hasOptions = question.options && Array.isArray(question.options) && question.options.length === 4;
-      const hasCorrectAnswer = question.options && question.options.some(opt => opt.isCorrect);
-      return hasRequiredFields && validType && validDifficulty && hasOptions && hasCorrectAnswer;
-    }
-
-    // Validate other question types
-    if (question.type === 'true_false') {
-      const hasOptions = question.options && Array.isArray(question.options) && question.options.length === 2;
-      return hasRequiredFields && validType && validDifficulty && hasOptions;
-    }
-
-    return hasRequiredFields && validType && validDifficulty;
+  isValidQuestion(question, questionTypes) {
+    return question &&
+           question.question &&
+           question.type &&
+           questionTypes.includes(question.type) &&
+           question.difficulty &&
+           question.topic;
   }
 
-  // Clean question data
-  cleanQuestion(question) {
-    return {
-      question: question.question.trim(),
-      type: question.type,
-      difficulty: question.difficulty,
-      topic: question.topic.trim(),
-      options: question.options || [],
-      correctAnswer: question.correctAnswer || '',
-      explanation: question.explanation || '',
-      marks: question.marks || 1,
-      aiModel: 'gpt-3.5-turbo'
-    };
-  }
+  // Clean and format question with language awareness
+  cleanQuestion(question, language = 'english') {
+    if (!question || typeof question !== 'object') return null;
 
-  // Clean content for better processing
-  cleanContent(content) {
-    return content
-      .replace(/\s+/g, ' ')
-      .replace(/[^\w\s\.\,\;\:\!\?\-\(\)]/g, '')
-      .trim();
-  }
+    const cleaned = { ...question };
+    logger.info(`Cleaning question: ${question.question ? question.question.substring(0, 100) : 'NO_QUESTION'}`);
 
-  // Ensure a good mix of question types
-  ensureQuestionTypeMix(questions, allowedTypes, targetCount) {
-    if (questions.length === 0) return questions;
-
-    // Count questions by type
-    const typeCounts = {};
-    allowedTypes.forEach(type => typeCounts[type] = 0);
-    
-    questions.forEach(q => {
-      if (typeCounts.hasOwnProperty(q.type)) {
-        typeCounts[q.type]++;
-      }
-    });
-
-    // Calculate target distribution (try to have at least 1 of each type)
-    const targetPerType = Math.max(1, Math.floor(targetCount / allowedTypes.length));
-    
-    // Sort questions to prioritize underrepresented types
-    const sortedQuestions = [...questions].sort((a, b) => {
-      const aCount = typeCounts[a.type] || 0;
-      const bCount = typeCounts[b.type] || 0;
-      
-      // If one type is underrepresented, prioritize it
-      if (aCount < targetPerType && bCount >= targetPerType) return -1;
-      if (bCount < targetPerType && aCount >= targetPerType) return 1;
-      
-      // Otherwise, maintain original order
-      return 0;
-    });
-
-    // Take the best mix
-    const finalQuestions = [];
-    const finalTypeCounts = {};
-    allowedTypes.forEach(type => finalTypeCounts[type] = 0);
-
-    for (const question of sortedQuestions) {
-      if (finalTypeCounts[question.type] < targetPerType) {
-        finalQuestions.push(question);
-        finalTypeCounts[question.type]++;
+    // Clean question text - be more careful with cleaning
+    if (cleaned.question) {
+      // Don't over-clean sample questions
+      if (typeof cleaned.question === 'string' && cleaned.question.includes('{')) {
+        // This is a sample question with placeholders, clean minimally
+        cleaned.question = cleaned.question
+          .replace(/\s+/g, ' ')
+          .trim();
+      } else {
+        // For AI-generated questions, apply minimal cleaning
+        cleaned.question = cleaned.question
+          .replace(/\s+/g, ' ')
+          .replace(/\n+/g, ' ')
+          .trim();
       }
       
-      if (finalQuestions.length >= targetCount) break;
+      // Ensure question is not empty after cleaning
+      if (!cleaned.question || cleaned.question.trim().length === 0) {
+        logger.warn(`Question became empty after cleaning, using original: ${question.question}`);
+        cleaned.question = question.question || 'Sample question';
+      }
+      
+      // Remove any corrupted characters that might have been introduced
+      if (language === 'hindi' || language === 'sanskrit') {
+        // Remove common corrupted patterns
+        cleaned.question = cleaned.question
+          .replace(/[,\-\?]{2,}/g, '') // Remove multiple commas, dashes, question marks
+          .replace(/^[,\-\?\s]+/, '') // Remove leading corrupted chars
+          .replace(/[,\-\?\s]+$/, '') // Remove trailing corrupted chars
+          .trim();
+      }
     }
 
-    // If we still have space, add remaining questions
-    if (finalQuestions.length < targetCount) {
-      for (const question of sortedQuestions) {
-        if (!finalQuestions.find(q => q._id === question._id)) {
-          finalQuestions.push(question);
-          if (finalQuestions.length >= targetCount) break;
+    // Clean options for MCQ questions
+    if (cleaned.options && Array.isArray(cleaned.options)) {
+      cleaned.options = cleaned.options.map(option => {
+        if (typeof option === 'string') {
+          // Convert string option to object format
+          return {
+            text: option.trim(), // Minimal cleaning for options
+            isCorrect: false
+          };
+        } else if (typeof option === 'object' && option.text) {
+          return {
+            text: option.text.trim(), // Minimal cleaning for options
+            isCorrect: option.isCorrect || false
+          };
         }
+        return option;
+      }).filter(option => option && option.text && option.text.trim().length > 0);
+    }
+
+    // Clean other text fields - minimal cleaning
+    if (cleaned.correctAnswer) {
+      cleaned.correctAnswer = typeof cleaned.correctAnswer === 'string' 
+        ? cleaned.correctAnswer.trim() 
+        : cleaned.correctAnswer;
+    }
+
+    if (cleaned.explanation) {
+      cleaned.explanation = typeof cleaned.explanation === 'string' 
+        ? cleaned.explanation.trim() 
+        : cleaned.explanation;
+    }
+
+    // Ensure proper language formatting for sample questions
+    if (language === 'hindi' || language === 'sanskrit') {
+      // For sample questions, ensure they're properly formatted
+      if (cleaned.question && cleaned.question.includes('{')) {
+        // This is a sample question, ensure proper formatting
+        cleaned.question = cleaned.question
+          .replace(/\s+/g, ' ')
+          .trim();
       }
     }
 
-    return finalQuestions;
+    // Ensure required fields are present
+    if (!cleaned.type) cleaned.type = 'mcq';
+    if (!cleaned.difficulty) cleaned.difficulty = 'medium';
+    if (!cleaned.topic) cleaned.topic = 'General';
+    if (!cleaned.language) cleaned.language = language;
+
+    logger.info(`Cleaned question: ${cleaned.question ? cleaned.question.substring(0, 100) : 'EMPTY'}`);
+    return cleaned;
+  }
+
+  // Clean content while preserving language characters
+  cleanContent(content, language = 'english') {
+    if (!content) return '';
+    
+    let cleaned = content
+      .replace(/\s+/g, ' ')
+      .replace(/\n+/g, ' ')
+      .trim();
+
+    // Language-specific cleaning
+    if (language === 'hindi' || language === 'sanskrit') {
+      // Preserve Devanagari characters and common English words, remove random characters
+      cleaned = cleaned
+        .replace(/[^\u0900-\u097F\s\w\.\,\;\:\!\?\-\(\)\[\]\{\}\u0980-\u09FF\u0A00-\u0A7F\u0A80-\u0AFF\u0B00-\u0B7F\u0B80-\u0BFF\u0C00-\u0C7F\u0C80-\u0CFF\u0D00-\u0D7F\u0D80-\u0DFF\u0E00-\u0E7F\u0E80-\u0EFF\u0F00-\u0FFF\u1000-\u109F\u1780-\u17FF\u1B00-\u1B7F\u1CD0-\u1CFF\uA800-\uA82F\uA840-\uA87F\uA880-\uA8DF\uA900-\uA92F\uA930-\uA95F\uAA00-\uAA5F\uAA60-\uAA7F\uAA80-\uAADF\uAAE0-\uAAFF\uAB00-\uAB2F\uAB30-\uAB6F\uAB70-\uABBF\uABC0-\uABFF\uD800-\uDFFF\uF900-\uFAFF\uFE70-\uFEFF]/g, '')
+        .replace(/\b[a-z]{1,2}\b/g, '') // Remove very short English words (1-2 letters)
+        .replace(/\b[a-z]{3,}\b(?=\s*[\u0900-\u097F])/g, '') // Remove English words before Hindi
+        .replace(/(?<=[\u0900-\u097F])\s+\b[a-z]{3,}\b/g, '') // Remove English words after Hindi
+        .replace(/\s+/g, ' ') // Clean up multiple spaces
+        .trim();
+    } else if (language === 'urdu') {
+      // Preserve Arabic/Persian characters and common English words
+      cleaned = cleaned.replace(/[^\u0600-\u06FF\s\w\.\,\;\:\!\?\-\(\)\[\]\{\}]/g, '');
+    } else {
+      // English cleaning
+      cleaned = cleaned.replace(/[^\w\s\.\,\;\:\!\?\-\(\)\[\]\{\}]/g, '');
+    }
+
+    return cleaned;
+  }
+
+  // Validate content quality
+  isValidContent(content, language = 'english') {
+    if (!content || content.length < 50) return false;
+    
+    const words = content.split(/\s+/).filter(word => word.length > 0);
+    if (words.length < 10) return false;
+
+    // Language-specific validation
+    if (language === 'hindi' || language === 'sanskrit' || language === 'urdu') {
+      // Check for meaningful content in Indian languages
+      const meaningfulChars = content.match(/[\u0900-\u097F\u0980-\u09FF\u0A00-\u0A7F\u0A80-\u0AFF\u0B00-\u0B7F\u0B80-\u0BFF\u0C00-\u0C7F\u0C80-\u0CFF\u0D00-\u0D7F\u0D80-\u0DFF\u0E00-\u0E7F\u0E80-\u0EFF\u0F00-\u0FFF\u1000-\u109F\u1780-\u17FF\u1B00-\u1B7F\u1CD0-\u1CFF\uA800-\uA82F\uA840-\uA87F\uA880-\uA8DF\uA900-\uA92F\uA930-\uA95F\uAA00-\uAA5F\uAA60-\uAA7F\uAA80-\uAADF\uAAE0-\uAAFF\uAB00-\uAB2F\uAB30-\uAB6F\uAB70-\uABBF\uABC0-\uABFF\uD800-\uDFFF\uF900-\uFAFF\uFE70-\uFEFF]/g);
+      if (meaningfulChars && meaningfulChars.length > 0) {
+        // Lower threshold for mixed content
+        return (meaningfulChars.length / content.length) > 0.05; // Reduced from 0.1 to 0.05
+      }
+      
+      // If no meaningful chars but has mixed content, still consider valid
+      const hasEnglish = content.match(/[a-zA-Z]/g);
+      if (hasEnglish && content.length > 100) {
+        return true; // Mixed content is valid
+      }
+    }
+
+    // Default validation for English
+    const meaningfulWords = words.filter(word => word.length > 2);
+    return (meaningfulWords.length / words.length) > 0.3; // At least 30% meaningful words
   }
 
   // Chunk content for processing
   chunkContent(content, maxChunkSize) {
-    const sentences = content.split(/[.!?]+/).filter(s => s.trim().length > 0);
     const chunks = [];
     let currentChunk = '';
+    
+    const sentences = content.split(/[.!?।॥]/).filter(s => s.trim().length > 0);
 
     for (const sentence of sentences) {
       if ((currentChunk + sentence).length > maxChunkSize && currentChunk.length > 0) {
@@ -500,135 +497,227 @@ Rules:
       chunks.push(currentChunk.trim());
     }
 
-    return chunks;
+    return chunks.length > 0 ? chunks : [content];
   }
 
-  // Generate question bank summary
-  async generateQuestionBankSummary(questions) {
-    try {
-      const summary = {
-        total: questions.length,
-        byType: {},
-        byDifficulty: {},
-        byTopic: {}
-      };
+  // Ensure good mix of question types
+  ensureQuestionTypeMix(questions, questionTypes, targetCount) {
+    const typeCounts = {};
+    questionTypes.forEach(type => typeCounts[type] = 0);
 
       questions.forEach(q => {
-        // Count by type
-        summary.byType[q.type] = (summary.byType[q.type] || 0) + 1;
+      if (typeCounts.hasOwnProperty(q.type)) {
+        typeCounts[q.type]++;
+      }
+    });
+    
+    // Calculate target distribution
+    const targetPerType = Math.ceil(targetCount / questionTypes.length);
+    
+    // Sort questions to prioritize underrepresented types
+    return questions.sort((a, b) => {
+      const aCount = typeCounts[a.type] || 0;
+      const bCount = typeCounts[b.type] || 0;
+      return aCount - bCount;
+    });
+  }
 
-        // Count by difficulty
-        summary.byDifficulty[q.difficulty] = (summary.byDifficulty[q.difficulty] || 0) + 1;
+  // Generate sample questions for fallback
+  generateSampleQuestions(content, subject, chapter, topic, questionTypes, difficulty, count, language = 'english') {
+    logger.info(`Generating ${count} sample questions in ${language} for ${subject} - ${chapter}`);
+    
+    const samples = {
+      english: [
+        {
+          question: `What is the main topic discussed in ${chapter} of ${subject}?`,
+          type: 'mcq',
+          difficulty: difficulty,
+          topic: topic,
+          options: [
+            { text: 'Option A', isCorrect: true },
+            { text: 'Option B', isCorrect: false },
+            { text: 'Option C', isCorrect: false },
+            { text: 'Option D', isCorrect: false }
+          ],
+          correctAnswer: 'Option A',
+          explanation: 'This is a sample question for demonstration purposes.'
+        },
+        {
+          question: `Explain the key concept of ${topic} in ${subject}.`,
+          type: 'short_answer',
+          difficulty: difficulty,
+          topic: topic,
+          options: [],
+          correctAnswer: 'Sample answer for demonstration.',
+          explanation: 'This is a sample question for demonstration purposes.'
+        }
+      ],
+      hindi: [
+        {
+          question: `${subject} के ${chapter} में क्या मुख्य विषय चर्चा की गई है?`,
+          type: 'mcq',
+          difficulty: difficulty,
+          topic: topic,
+          options: [
+            { text: 'विकल्प A', isCorrect: true },
+            { text: 'विकल्प B', isCorrect: false },
+            { text: 'विकल्प C', isCorrect: false },
+            { text: 'विकल्प D', isCorrect: false }
+          ],
+          correctAnswer: 'विकल्प A',
+          explanation: 'यह प्रदर्शन उद्देश्यों के लिए एक नमूना प्रश्न है।'
+        },
+        {
+          question: `${subject} में ${topic} की मुख्य अवधारणा को समझाएं।`,
+          type: 'short_answer',
+          difficulty: difficulty,
+          topic: topic,
+          options: [],
+          correctAnswer: 'प्रदर्शन के लिए नमूना उत्तर।',
+          explanation: 'यह प्रदर्शन उद्देश्यों के लिए एक नमूना प्रश्न है।'
+        },
+        {
+          question: `${chapter} के अनुसार ${topic} का क्या महत्व है?`,
+          type: 'mcq',
+          difficulty: difficulty,
+          topic: topic,
+          options: [
+            { text: 'यह अध्ययन के लिए आवश्यक है', isCorrect: true },
+            { text: 'इसका कोई महत्व नहीं है', isCorrect: false },
+            { text: 'यह वैकल्पिक विषय है', isCorrect: false },
+            { text: 'इसे छोड़ा जा सकता है', isCorrect: false }
+          ],
+          correctAnswer: 'यह अध्ययन के लिए आवश्यक है',
+          explanation: 'यह विषय पाठ्यक्रम का महत्वपूर्ण भाग है।'
+        },
+        {
+          question: `${subject} के ${chapter} में ${topic} के बारे में क्या पढ़ाया जाता है?`,
+          type: 'short_answer',
+          difficulty: difficulty,
+          topic: topic,
+          options: [],
+          correctAnswer: 'इस अध्याय में हमें मूल अवधारणाएं और सिद्धांत सिखाए जाते हैं।',
+          explanation: 'यह अध्याय छात्रों को बुनियादी ज्ञान प्रदान करता है।'
+        },
+        {
+          question: `${topic} से संबंधित मुख्य सिद्धांत क्या हैं?`,
+          type: 'mcq',
+          difficulty: difficulty,
+          topic: topic,
+          options: [
+            { text: 'सिद्धांत A और B', isCorrect: true },
+            { text: 'केवल सिद्धांत A', isCorrect: false },
+            { text: 'सिद्धांत C और D', isCorrect: false },
+            { text: 'कोई सिद्धांत नहीं', isCorrect: false }
+          ],
+          correctAnswer: 'सिद्धांत A और B',
+          explanation: 'ये दोनों सिद्धांत इस विषय की नींव हैं।'
+        }
+      ],
+      sanskrit: [
+        {
+          question: `${subject}स्य ${chapter} किम् मुख्यं विषयम् चर्चितम्?`,
+          type: 'mcq',
+          difficulty: difficulty,
+          topic: topic,
+          options: [
+            { text: 'विकल्प A', isCorrect: true },
+            { text: 'विकल्प B', isCorrect: false },
+            { text: 'विकल्प C', isCorrect: false },
+            { text: 'विकल्प D', isCorrect: false }
+          ],
+          correctAnswer: 'विकल्प A',
+          explanation: 'एषः प्रदर्शनार्थं नमूना प्रश्नः।'
+        },
+        {
+          question: `${subject}े ${topic}स्य मुख्यं सिद्धान्तं व्याख्यातु।`,
+          type: 'short_answer',
+          difficulty: difficulty,
+          topic: topic,
+          options: [],
+          correctAnswer: 'प्रदर्शनार्थं नमूना उत्तरम्।',
+          explanation: 'एषः प्रदर्शनार्थं नमूना प्रश्नः।'
+        }
+      ],
+      urdu: [
+        {
+          question: `${subject} کے ${chapter} میں کیا اہم موضوع زیر بحث آیا ہے؟`,
+          type: 'mcq',
+          difficulty: difficulty,
+          topic: topic,
+          options: [
+            { text: 'اختیار A', isCorrect: true },
+            { text: 'اختیار B', isCorrect: false },
+            { text: 'اختیار C', isCorrect: false },
+            { text: 'اختیار D', isCorrect: false }
+          ],
+          correctAnswer: 'اختیار A',
+          explanation: 'یہ مظاہرے کے مقاصد کے لیے ایک نمونہ سوال ہے۔'
+        },
+        {
+          question: `${subject} میں ${topic} کی اہم تصور کو واضح کریں۔`,
+          type: 'short_answer',
+          difficulty: difficulty,
+          topic: topic,
+          options: [],
+          correctAnswer: 'مظاہرے کے لیے نمونہ جواب۔',
+          explanation: 'یہ مظاہرے کے مقاصد کے لیے ایک نمونہ سوال ہے۔'
+        }
+      ]
+    };
 
-        // Count by topic
-        summary.byTopic[q.topic] = (summary.byTopic[q.topic] || 0) + 1;
+    const langSamples = samples[language] || samples.english;
+    const result = [];
+    
+    for (let i = 0; i < count; i++) {
+      const sample = langSamples[i % langSamples.length];
+      // Properly replace placeholders
+      const question = sample.question
+        .replace(/\{subject\}/g, subject)
+        .replace(/\{chapter\}/g, chapter)
+        .replace(/\{topic\}/g, topic);
+      
+      result.push({
+        ...sample,
+        question: question
       });
-
-      return summary;
-    } catch (error) {
-      logger.error('Question bank summary error:', error);
-      return null;
     }
+    
+    return result;
   }
 
-  // Generate sample questions when OpenAI is not available or parsing fails
-  generateSampleQuestions(chunk, subject, chapter, topic, questionTypes, difficulty, count) {
-    const questions = [];
-    
-    // Extract some key terms from the chunk for more relevant questions
-    const words = chunk.split(/\s+/).filter(word => word.length > 4).slice(0, 5);
-    const keyTerms = words.length > 0 ? words.join(', ') : 'key concepts';
-    
-    const sampleQuestions = [
-      {
-        question: `What is the main topic discussed in the ${chapter} chapter of ${subject}?`,
-        type: 'mcq',
-        difficulty: difficulty,
-        topic: topic,
-        options: [
-          { text: 'Introduction to key concepts', isCorrect: true },
-          { text: 'Advanced mathematical formulas', isCorrect: false },
-          { text: 'Historical background', isCorrect: false },
-          { text: 'Practical applications only', isCorrect: false }
-        ],
-        correctAnswer: 'Introduction to key concepts',
-        explanation: `This chapter focuses on introducing the fundamental concepts of ${topic} in ${subject}.`,
-        marks: 1
-      },
-      {
-        question: `Explain the key concepts covered in the ${chapter} chapter of ${subject}.`,
-        type: 'short_answer',
-        difficulty: difficulty,
-        topic: topic,
-        correctAnswer: `The ${chapter} chapter covers ${keyTerms} and their applications in ${subject}.`,
-        explanation: 'This chapter provides a comprehensive overview of the main concepts and their practical significance.',
-        marks: 2
-      },
-      {
-        question: `True or False: The ${chapter} chapter contains important information about ${subject}.`,
-        type: 'true_false',
-        difficulty: difficulty,
-        topic: topic,
-        options: [
-          { text: 'True', isCorrect: true },
-          { text: 'False', isCorrect: false }
-        ],
-        correctAnswer: 'True',
-        explanation: `The ${chapter} chapter is essential for understanding ${topic} in ${subject}.`,
-        marks: 1
-      },
-      {
-        question: `What are the main learning objectives of the ${chapter} chapter?`,
-        type: 'long_answer',
-        difficulty: difficulty,
-        topic: topic,
-        correctAnswer: `The main learning objectives include understanding ${keyTerms}, applying concepts to real-world scenarios, and developing analytical skills in ${subject}.`,
-        explanation: 'This chapter aims to build a strong foundation in the subject matter.',
-        marks: 3
-      },
-      {
-        question: `Fill in the blank: The ${chapter} chapter focuses on _____ in ${subject}.`,
-        type: 'fill_blank',
-        difficulty: difficulty,
-        topic: topic,
-        correctAnswer: keyTerms,
-        explanation: `The chapter primarily deals with ${keyTerms} and their applications.`,
-        marks: 1
-      }
-    ];
-
-    // Generate the requested number of questions
-    for (let i = 0; i < count && i < sampleQuestions.length; i++) {
-      const question = { ...sampleQuestions[i] };
-      
-      // Ensure the question type is in the allowed types
-      if (questionTypes && !questionTypes.includes(question.type)) {
-        question.type = questionTypes[0] || 'mcq';
-      }
-      
-      questions.push(question);
-    }
-
-    logger.info(`Generated ${questions.length} sample questions for ${subject} - ${chapter}`);
-    return questions;
-  }
-
-  // Test AI service connection
+  // Test connection to AI service
   async testConnection() {
     if (!this.openai) {
-      return false;
+      return { success: false, message: 'OpenAI not configured' };
     }
 
     try {
       const completion = await this.openai.chat.completions.create({
-        model: 'gpt-3.5-turbo',
-        messages: [{ role: 'user', content: 'Hello' }],
-        max_tokens: 5
+        model: 'gpt-5',
+        messages: [
+          {
+            role: 'user',
+            content: 'Hello! Please respond with "Connection successful"'
+          }
+        ],
+        max_completion_tokens: 50
+        // Note: No temperature parameter for GPT-5
       });
-      return completion.choices[0].message.content ? true : false;
+
+      const response = completion.choices[0].message.content;
+      return { 
+        success: true, 
+        message: 'AI service connection successful',
+        response: response
+      };
     } catch (error) {
       logger.error('AI service connection test failed:', error);
-      return false;
+      return { 
+        success: false, 
+        message: 'AI service connection failed',
+        error: error.message
+      };
     }
   }
 }

@@ -30,16 +30,22 @@ class QueueService {
       pdf.textChunks = processedData.textChunks;
       pdf.totalPages = processedData.totalPages;
       pdf.processingStatus = 'completed';
+      
+      // Store language information
+      pdf.language = processedData.language;
+      pdf.languageConfidence = processedData.languageConfidence;
+      
       await pdf.save();
 
-      // Generate questions synchronously
+      // Generate questions synchronously with language support
       await this.addQuestionGenerationJob({
         pdfId: pdf._id,
         subject: pdf.subject,
         chapter: pdf.chapter,
         questionTypes: data.questionTypes || ['mcq', 'short_answer'],
         difficulty: data.difficulty || 'medium',
-        count: data.questionCount || 10
+        count: data.questionCount || 10,
+        language: processedData.language || 'english'
       });
 
       logger.info(`PDF processing completed: ${pdf._id}`);
@@ -84,13 +90,15 @@ class QueueService {
           chapter: data.chapter,
           questionTypes: data.questionTypes,
           difficulty: data.difficulty,
-          count: questionsPerChunk
+          count: questionsPerChunk,
+          language: data.language || 'english'
         });
         
         // Add chunk information to each question
         chunkQuestions.forEach(q => {
           q.sourceChunk = chunk;
           q.chunkIndex = i;
+          q.language = data.language || 'english';
         });
         
         allQuestions.push(...chunkQuestions);

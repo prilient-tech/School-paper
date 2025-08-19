@@ -30,16 +30,19 @@ const questionSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
-  options: [{
-    text: {
-      type: String,
-      required: true
-    },
-    isCorrect: {
-      type: Boolean,
-      default: false
-    }
-  }],
+  options: {
+    type: [{
+      text: {
+        type: String,
+        required: true
+      },
+      isCorrect: {
+        type: Boolean,
+        default: false
+      }
+    }],
+    default: []
+  },
   correctAnswer: {
     type: String,
     required: function() {
@@ -84,7 +87,12 @@ const questionSchema = new mongoose.Schema({
   },
   aiModel: {
     type: String,
-    default: 'gpt-3.5-turbo'
+    default: 'gpt-5'
+  },
+  language: {
+    type: String,
+    enum: ['english', 'hindi', 'sanskrit', 'urdu', 'unknown'],
+    default: 'english'
   },
   generationPrompt: {
     type: String
