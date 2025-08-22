@@ -38,7 +38,9 @@ class ImageService {
 
         try {
           // Convert image to PNG format for better compatibility
-          const processedImageBuffer = await this.processImage(imageFile.buffer);
+          // Use file path if available (disk storage), otherwise use buffer
+          const imageInput = imageFile.path || imageFile.buffer;
+          const processedImageBuffer = await this.processImage(imageInput);
           
           // Embed the image in the PDF
           const image = await pdfDoc.embedPng(processedImageBuffer);
@@ -84,11 +86,21 @@ class ImageService {
 
   /**
    * Process image to ensure compatibility with PDF
-   * @param {Buffer} imageBuffer - Raw image buffer
+   * @param {Buffer|string} imageInput - Raw image buffer or file path
    * @returns {Promise<Buffer>} - Processed PNG buffer
    */
-  async processImage(imageBuffer) {
+  async processImage(imageInput) {
     try {
+      let imageBuffer;
+      
+      // If imageInput is a file path (disk storage), read the file
+      if (typeof imageInput === 'string') {
+        imageBuffer = await fs.readFile(imageInput);
+      } else {
+        // If imageInput is a buffer (memory storage), use it directly
+        imageBuffer = imageInput;
+      }
+      
       // Use sharp to process the image
       const processedBuffer = await sharp(imageBuffer)
         .png() // Convert to PNG for better PDF compatibility

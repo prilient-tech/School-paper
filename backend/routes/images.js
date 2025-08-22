@@ -10,22 +10,8 @@ const logger = require('../utils/logger');
 
 const router = express.Router();
 
-// Configure multer for multiple image uploads
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: parseInt(process.env.MAX_FILE_SIZE) || 10 * 1024 * 1024, // 10MB per file
-    files: 20 // Maximum 20 images at once
-  },
-  fileFilter: (req, file, cb) => {
-    const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
-    if (validTypes.includes(file.mimetype)) {
-      cb(null, true);
-    } else {
-      cb(new Error('Only image files (JPG, PNG, GIF, WebP) are allowed'), false);
-    }
-  }
-});
+// Import sanitized upload middleware
+const { imageUpload } = require('../middleware/upload');
 
 // @route   GET /api/images
 // @desc    Get all image uploads (converted to PDFs)
@@ -97,7 +83,7 @@ router.get('/', requireTeacher, async (req, res) => {
 // @access  Private (Teacher)
 router.post('/', 
   requireTeacher,
-  upload.array('images', 20), // Maximum 20 images
+  imageUpload.array('images', 20), // Maximum 20 images
   [
     body('title').notEmpty().withMessage('Title is required'),
     body('subject').isMongoId().withMessage('Valid subject is required'),
@@ -151,7 +137,8 @@ router.post('/',
         processingStatus: 'processing',
         questionGenerationStatus: 'pending',
         originalImages: req.files.map(file => ({
-          filename: file.originalname,
+          filename: file.filename, // Already sanitized by middleware
+          originalName: file.originalname,
           mimetype: file.mimetype,
           size: file.size
         }))

@@ -11,20 +11,8 @@ const logger = require('../utils/logger');
 
 const router = express.Router();
 
-// Configure multer for file upload
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: parseInt(process.env.MAX_FILE_SIZE) || 10 * 1024 * 1024 // 10MB
-  },
-  fileFilter: (req, file, cb) => {
-    if (file.mimetype === 'application/pdf') {
-      cb(null, true);
-    } else {
-      cb(new Error('Only PDF files are allowed'), false);
-    }
-  }
-});
+// Import sanitized upload middleware
+const { pdfUpload } = require('../middleware/upload');
 
 // @route   GET /api/pdfs
 // @desc    Get all PDFs (with pagination and filtering)
@@ -140,7 +128,7 @@ router.get('/:id', async (req, res) => {
 // @access  Private (Admin, Teacher)
 router.post('/', [
   requireTeacher,
-  upload.single('pdf'),
+  pdfUpload.single('pdf'),
   body('title', 'Title is required').not().isEmpty(),
   body('subject', 'Subject is required').isMongoId(),
   body('chapter', 'Chapter is required').isMongoId(),
@@ -195,17 +183,17 @@ router.post('/', [
       });
     }
 
-    // Save file
-    const fileInfo = await pdfService.saveUploadedFile(req.file);
+    // Save file (filename is already sanitized by middleware)
+    const savedFileInfo = await pdfService.saveUploadedFile(req.file);
 
     // Create PDF record
     const pdf = new Pdf({
       title,
-      filename: fileInfo.filename,
-      originalName: fileInfo.originalName,
-      filePath: fileInfo.filePath,
-      fileSize: fileInfo.fileSize,
-      mimeType: fileInfo.mimeType,
+      filename: savedFileInfo.filename,
+      originalName: savedFileInfo.originalName,
+      filePath: savedFileInfo.filePath,
+      fileSize: savedFileInfo.fileSize,
+      mimeType: savedFileInfo.mimeType,
       subject,
       chapter,
       uploadedBy: req.user.id,

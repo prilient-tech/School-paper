@@ -238,6 +238,18 @@ class PDFService {
   // Save uploaded file
   async saveUploadedFile(file, customName = null) {
     try {
+      // If file is already saved to disk (using diskStorage), just return the info
+      if (file.path) {
+        return {
+          filename: file.filename,
+          originalName: file.originalname,
+          filePath: file.path,
+          fileSize: file.size,
+          mimeType: file.mimetype
+        };
+      }
+      
+      // Fallback for memory storage (if needed)
       const timestamp = Date.now();
       const originalName = file.originalname;
       const extension = path.extname(originalName);
