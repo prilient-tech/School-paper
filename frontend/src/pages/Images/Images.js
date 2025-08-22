@@ -17,9 +17,9 @@ const getBackendUrl = () => {
     return '';
   }
   
-  // For production, use the same domain with /api prefix
-  // Since backend is hosted on the same domain with /api path
-  if (process.env.NODE_ENV === 'production' || !window.location.port) {
+  // For production or when no port is specified (same domain), return empty string
+  // This will trigger the /api prefix logic in the URL construction
+  if (process.env.NODE_ENV === 'production' || !window.location.port || window.location.hostname === 'aigenius.prilient.com') {
     return '';
   }
   
@@ -235,24 +235,29 @@ const Images = () => {
                             const backendUrl = getBackendUrl();
                             let finalPdfUrl = image.pdfUrl;
                             
-                            // If backend is on same domain (production), use /api prefix
-                            // If backend is on different port (development), use full backend URL
-                            if (backendUrl) {
+                            // Force the /api prefix for production (aigenius.prilient.com)
+                            if (window.location.hostname === 'aigenius.prilient.com') {
+                              // Production: always use /api prefix
+                              finalPdfUrl = `/api${image.pdfUrl}`;
+                            } else if (backendUrl && backendUrl !== '') {
                               // Development: backend on different port
                               finalPdfUrl = `${backendUrl}${image.pdfUrl}`;
                             } else {
-                              // Production: backend on same domain with /api prefix
+                              // Development with proxy or other cases: use /api prefix
                               finalPdfUrl = `/api${image.pdfUrl}`;
                             }
                             
                             // Debug logging
-                            console.log('Image PDF URL Debug:', {
+                            console.log('🖼️ Image PDF URL Debug:', {
+                              imageTitle: image.title,
                               originalPdfUrl: image.pdfUrl,
                               backendUrl,
                               finalPdfUrl,
                               environment: process.env.NODE_ENV,
                               origin: window.location.origin,
-                              port: window.location.port
+                              port: window.location.port,
+                              hostname: window.location.hostname,
+                              timestamp: new Date().toISOString()
                             });
                             
                             const imageWithBackendUrl = {

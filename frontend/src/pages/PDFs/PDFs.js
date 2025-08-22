@@ -10,27 +10,27 @@ const getBackendUrl = () => {
   if (process.env.REACT_APP_API_URL) {
     return process.env.REACT_APP_API_URL;
   }
-  
+
   // In development with proxy, use relative URL
   if (process.env.NODE_ENV === 'development' && window.location.port === '3000') {
     return '';
   }
-  
-  // For production, use the same domain with /api prefix
-  // Since backend is hosted on the same domain with /api path
-  if (process.env.NODE_ENV === 'production' || !window.location.port) {
+
+  // For production or when no port is specified (same domain), return empty string
+  // This will trigger the /api prefix logic in the URL construction
+  if (process.env.NODE_ENV === 'production' || !window.location.port || window.location.hostname === 'aigenius.prilient.com') {
     return '';
   }
-  
+
   // For development with different ports, construct from current URL
   const currentOrigin = window.location.origin;
   const currentPort = window.location.port;
-  
+
   // If frontend is on port 3000, backend is likely on 5025
   if (currentPort === '3000') {
     return currentOrigin.replace('3000', '5025');
   }
-  
+
   // For other cases, try to construct backend URL
   // You can customize this based on your deployment setup
   return currentOrigin.replace(/:\d+/, ':5025');
@@ -125,8 +125,8 @@ const PDFs = () => {
 
   // Show professional loader during PDF upload and processing
   if (uploadPDF.isLoading || (uploadedPdfId && !uploadPDF.isSuccess)) {
-    return <ProfessionalLoader 
-      message="Processing your PDF and generating questions..." 
+    return <ProfessionalLoader
+      message="Processing your PDF and generating questions..."
       pdfId={uploadedPdfId}
     />;
   }
@@ -180,12 +180,11 @@ const PDFs = () => {
                   {pdf.chapter?.name}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap">
-                  <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                    pdf.processingStatus === 'completed' ? 'bg-green-100 text-green-800' :
-                    pdf.processingStatus === 'processing' ? 'bg-yellow-100 text-yellow-800' :
-                    pdf.processingStatus === 'failed' ? 'bg-red-100 text-red-800' :
-                    'bg-gray-100 text-gray-800'
-                  }`}>
+                  <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${pdf.processingStatus === 'completed' ? 'bg-green-100 text-green-800' :
+                      pdf.processingStatus === 'processing' ? 'bg-yellow-100 text-yellow-800' :
+                        pdf.processingStatus === 'failed' ? 'bg-red-100 text-red-800' :
+                          'bg-gray-100 text-gray-800'
+                    }`}>
                     {pdf.processingStatus}
                   </span>
                 </td>
@@ -193,61 +192,87 @@ const PDFs = () => {
                   {pdf.uploadedBy?.name}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                                     {(() => {
-                     // Construct the PDF URL with correct backend URL
-                     const pdfPath = pdf.pdfUrl || pdf.filePath || `/uploads/${pdf.filename || pdf.fileName}`;
-                     const backendUrl = getBackendUrl();
-                     
-                     // If backend is on same domain (production), use /api prefix
-                     // If backend is on different port (development), use full backend URL
-                     let fullPdfUrl;
-                     if (backendUrl) {
-                       // Development: backend on different port
-                       fullPdfUrl = `${backendUrl}${pdfPath}`;
-                     } else {
-                       // Production: backend on same domain with /api prefix
-                       fullPdfUrl = `/api${pdfPath}`;
-                     }
-                     
-                     // Debug logging
-                     console.log('PDF URL Debug:', {
-                       pdfPath,
-                       backendUrl,
-                       fullPdfUrl,
-                       environment: process.env.NODE_ENV,
-                       origin: window.location.origin,
-                       port: window.location.port
-                     });
-                     
-                     return (
-                       <a
-                         href={fullPdfUrl}
-                         target="_blank"
-                         rel="noopener noreferrer"
-                         className="text-indigo-600 hover:text-indigo-900 mr-4"
-                         onClick={(e) => {
-                           // Prevent default behavior and handle PDF viewing
-                           e.preventDefault();
-                           
-                           // Create a new window/tab with the PDF using full backend URL
-                           const newWindow = window.open(fullPdfUrl, '_blank');
-                           
-                           // If popup is blocked, show a message and offer alternative
-                           if (!newWindow || newWindow.closed || typeof newWindow.closed === 'undefined') {
-                             toast.error('Popup blocked! Opening PDF in same tab...', {
-                               duration: 3000,
-                             });
-                             // Fallback: open in same tab after a short delay
-                             setTimeout(() => {
-                               window.location.href = fullPdfUrl;
-                             }, 1000);
-                           }
-                         }}
-                       >
-                         View
-                       </a>
-                     );
-                   })()}
+                  {(() => {
+                    // Construct the PDF URL with correct backend URL
+                    const pdfPath = pdf.pdfUrl || pdf.filePath || `/uploads/${pdf.filename || pdf.fileName}`;
+                    const backendUrl = getBackendUrl();
+
+                    // Ensure pdfPath starts with /uploads/
+                    const normalizedPdfPath = pdfPath.startsWith('/uploads/') ? pdfPath : `/uploads/${pdf.filename || pdf.fileName}`;
+
+                    // Force the /api prefix for production (aigenius.prilient.com)
+                    let fullPdfUrl;
+                    if (window.location.hostname === 'aigenius.prilient.com') {
+                      // Production: always use /api prefix
+                      fullPdfUrl = `/api${normalizedPdfPath}`;
+                    } else if (backendUrl && backendUrl !== '') {
+                      // Development: backend on different port
+                      fullPdfUrl = `${backendUrl}${normalizedPdfPath}`;
+                    } else {
+                      // Development with proxy or other cases: use /api prefix
+                      fullPdfUrl = `/api${normalizedPdfPath}`;
+                    }
+
+                    // Debug logging
+                    console.log('PDF URL Debug:', {
+                      originalPdfPath: pdfPath,
+                      normalizedPdfPath,
+                      backendUrl,
+                      fullPdfUrl,
+                      environment: process.env.NODE_ENV,
+                      origin: window.location.origin,
+                      port: window.location.port,
+                      hostname: window.location.hostname
+                    });
+
+                    return (
+                      <a
+                        href={fullPdfUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-indigo-600 hover:text-indigo-900 mr-4"
+                        onClick={(e) => {
+                          // Prevent default behavior and handle PDF viewing
+                          e.preventDefault();
+
+                          // Log the navigation details before proceeding
+                          console.log('🚀 PDF Navigation Details:', {
+                            pdfTitle: pdf.title,
+                            pdfFilename: pdf.filename || pdf.fileName,
+                            originalPdfPath: pdf.pdfUrl || pdf.filePath,
+                            normalizedPdfPath,
+                            backendUrl,
+                            fullPdfUrl,
+                            currentHostname: window.location.hostname,
+                            currentOrigin: window.location.origin,
+                            currentPort: window.location.port,
+                            environment: process.env.NODE_ENV,
+                            timestamp: new Date().toISOString()
+                          });
+
+                          // Create a new window/tab with the PDF using full backend URL
+                          const newWindow = window.open(fullPdfUrl, '_blank');
+
+                          // If popup is blocked, show a message and offer alternative
+                          if (!newWindow || newWindow.closed || typeof newWindow.closed === 'undefined') {
+                            console.log('⚠️ Popup blocked, falling back to same tab navigation');
+                            toast.error('Popup blocked! Opening PDF in same tab...', {
+                              duration: 3000,
+                            });
+                            // Fallback: open in same tab after a short delay
+                            setTimeout(() => {
+                              console.log('🔄 Navigating to PDF in same tab:', fullPdfUrl);
+                              window.location.href = fullPdfUrl;
+                            }, 1000);
+                          } else {
+                            console.log('✅ Successfully opened PDF in new tab:', fullPdfUrl);
+                          }
+                        }}
+                      >
+                        View
+                      </a>
+                    );
+                  })()}
                 </td>
               </tr>
             ))}
