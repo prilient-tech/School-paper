@@ -20,6 +20,13 @@ router.get('/', async (req, res) => {
 
     const filter = { isActive: true };
     
+    // Build sort object
+    let sort = { createdAt: -1 }; // default sort
+    if (req.query.sortBy && req.query.sortOrder) {
+      const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
+      sort = { [req.query.sortBy]: sortOrder };
+    }
+    
     // Filter by subject
     if (req.query.subject) {
       filter.subject = req.query.subject;
@@ -60,7 +67,7 @@ router.get('/', async (req, res) => {
       .populate('chapter', 'name number')
       .populate('generatedBy', 'name email')
       .populate('sourcePdf', 'title')
-      .sort({ createdAt: -1 })
+      .sort(sort)
       .skip(skip)
       .limit(limit);
 
@@ -242,9 +249,9 @@ router.post('/', [
 // @access  Private (Admin, Teacher)
 router.put('/:id', [
   requireTeacher,
-  body('question', 'Question text is required').not().isEmpty(),
-  body('type', 'Question type is required').isIn(['mcq', 'short_answer', 'long_answer', 'true_false', 'fill_blank']),
-  body('difficulty', 'Difficulty is required').isIn(['easy', 'medium', 'hard'])
+  body('question').optional().not().isEmpty(),
+  body('type').optional().isIn(['mcq', 'short_answer', 'long_answer', 'true_false', 'fill_blank']),
+  body('difficulty').optional().isIn(['easy', 'medium', 'hard'])
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -282,37 +289,40 @@ router.put('/:id', [
       });
     }
 
-    // Validate MCQ options
-    if (type === 'mcq') {
-      if (!options || !Array.isArray(options) || options.length !== 4) {
-        return res.status(400).json({ 
-          success: false, 
-          message: 'MCQ questions must have exactly 4 options' 
-        });
-      }
-      
-      const correctOptions = options.filter(opt => opt.isCorrect);
-      if (correctOptions.length !== 1) {
-        return res.status(400).json({ 
-          success: false, 
-          message: 'MCQ questions must have exactly one correct answer' 
-        });
+    // Only validate fields that are being updated
+    if (type !== undefined) {
+      // Validate MCQ options
+      if (type === 'mcq') {
+        if (!options || !Array.isArray(options) || options.length !== 4) {
+          return res.status(400).json({ 
+            success: false, 
+            message: 'MCQ questions must have exactly 4 options' 
+          });
+        }
+        
+        const correctOptions = options.filter(opt => opt.isCorrect);
+        if (correctOptions.length !== 1) {
+          return res.status(400).json({ 
+            success: false, 
+            message: 'MCQ questions must have exactly one correct answer' 
+          });
+        }
       }
     }
 
-    // Update question
-    questionDoc.question = question;
-    questionDoc.type = type;
-    questionDoc.difficulty = difficulty;
-    questionDoc.topic = topic;
-    questionDoc.options = options || questionDoc.options;
-    questionDoc.correctAnswer = correctAnswer !== undefined ? correctAnswer : questionDoc.correctAnswer;
-    questionDoc.explanation = explanation !== undefined ? explanation : questionDoc.explanation;
-    questionDoc.marks = marks || questionDoc.marks;
+    // Update question - only update fields that are provided
+    if (question !== undefined) questionDoc.question = question;
+    if (type !== undefined) questionDoc.type = type;
+    if (difficulty !== undefined) questionDoc.difficulty = difficulty;
+    if (topic !== undefined) questionDoc.topic = topic;
+    if (options !== undefined) questionDoc.options = options;
+    if (correctAnswer !== undefined) questionDoc.correctAnswer = correctAnswer;
+    if (explanation !== undefined) questionDoc.explanation = explanation;
+    if (marks !== undefined) questionDoc.marks = marks;
 
     await questionDoc.save();
 
-    logger.info(`Question updated: ${topic} by ${req.user.email}`);
+    logger.info(`Question updated: ${topic || 'marks only'} by ${req.user.email}`);
 
     res.json({
       success: true,
@@ -320,6 +330,59 @@ router.put('/:id', [
     });
   } catch (error) {
     logger.error('Update question error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Server error' 
+    });
+  }
+});
+
+// @route   PATCH /api/questions/:id/marks
+// @desc    Update question marks only
+// @access  Private (Admin, Teacher)
+router.patch('/:id/marks', [
+  requireTeacher,
+  body('marks', 'Marks is required').isInt({ min: 1 })
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ 
+        success: false, 
+        errors: errors.array() 
+      });
+    }
+
+    const { marks } = req.body;
+
+    const questionDoc = await Question.findById(req.params.id);
+    if (!questionDoc) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Question not found' 
+      });
+    }
+
+    // Check access for teachers
+    if (req.user.role === 'teacher' && questionDoc.generatedBy.toString() !== req.user.id) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Access denied' 
+      });
+    }
+
+    // Update only marks
+    questionDoc.marks = marks;
+    await questionDoc.save();
+
+    logger.info(`Question marks updated: ${marks} by ${req.user.email}`);
+
+    res.json({
+      success: true,
+      data: questionDoc
+    });
+  } catch (error) {
+    logger.error('Update question marks error:', error);
     res.status(500).json({ 
       success: false, 
       message: 'Server error' 

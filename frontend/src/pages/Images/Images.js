@@ -17,7 +17,13 @@ const getBackendUrl = () => {
     return '';
   }
   
-  // For production or different ports, construct from current URL
+  // For production, use the same domain with /api prefix
+  // Since backend is hosted on the same domain with /api path
+  if (process.env.NODE_ENV === 'production' || !window.location.port) {
+    return '';
+  }
+  
+  // For development with different ports, construct from current URL
   const currentOrigin = window.location.origin;
   const currentPort = window.location.port;
   
@@ -229,12 +235,25 @@ const Images = () => {
                             const backendUrl = getBackendUrl();
                             let finalPdfUrl = image.pdfUrl;
                             
-                            // Only prepend backend URL if it's not already a full URL
-                            if (backendUrl && !image.pdfUrl.startsWith('http')) {
-                              // Remove /api from backend URL if it exists for file serving
-                              const cleanBackendUrl = backendUrl.replace('/api', '');
-                              finalPdfUrl = `${cleanBackendUrl}${image.pdfUrl}`;
+                            // If backend is on same domain (production), use /api prefix
+                            // If backend is on different port (development), use full backend URL
+                            if (backendUrl) {
+                              // Development: backend on different port
+                              finalPdfUrl = `${backendUrl}${image.pdfUrl}`;
+                            } else {
+                              // Production: backend on same domain with /api prefix
+                              finalPdfUrl = `/api${image.pdfUrl}`;
                             }
+                            
+                            // Debug logging
+                            console.log('Image PDF URL Debug:', {
+                              originalPdfUrl: image.pdfUrl,
+                              backendUrl,
+                              finalPdfUrl,
+                              environment: process.env.NODE_ENV,
+                              origin: window.location.origin,
+                              port: window.location.port
+                            });
                             
                             const imageWithBackendUrl = {
                               ...image,

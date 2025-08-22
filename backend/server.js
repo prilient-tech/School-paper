@@ -77,6 +77,9 @@ app.use((req, res, next) => {
 // Static folder
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
+// Also serve uploads through /api/uploads for frontend compatibility
+app.use('/api/uploads', express.static(path.join(__dirname, 'uploads')));
+
 // Serve static files from the React app build directory
 app.use(express.static(path.join(__dirname, 'public')));
 

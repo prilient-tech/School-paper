@@ -16,7 +16,13 @@ const getBackendUrl = () => {
     return '';
   }
   
-  // For production or different ports, construct from current URL
+  // For production, use the same domain with /api prefix
+  // Since backend is hosted on the same domain with /api path
+  if (process.env.NODE_ENV === 'production' || !window.location.port) {
+    return '';
+  }
+  
+  // For development with different ports, construct from current URL
   const currentOrigin = window.location.origin;
   const currentPort = window.location.port;
   
@@ -191,7 +197,27 @@ const PDFs = () => {
                      // Construct the PDF URL with correct backend URL
                      const pdfPath = pdf.pdfUrl || pdf.filePath || `/uploads/${pdf.filename || pdf.fileName}`;
                      const backendUrl = getBackendUrl();
-                     const fullPdfUrl = backendUrl ? `${backendUrl}${pdfPath}` : pdfPath;
+                     
+                     // If backend is on same domain (production), use /api prefix
+                     // If backend is on different port (development), use full backend URL
+                     let fullPdfUrl;
+                     if (backendUrl) {
+                       // Development: backend on different port
+                       fullPdfUrl = `${backendUrl}${pdfPath}`;
+                     } else {
+                       // Production: backend on same domain with /api prefix
+                       fullPdfUrl = `/api${pdfPath}`;
+                     }
+                     
+                     // Debug logging
+                     console.log('PDF URL Debug:', {
+                       pdfPath,
+                       backendUrl,
+                       fullPdfUrl,
+                       environment: process.env.NODE_ENV,
+                       origin: window.location.origin,
+                       port: window.location.port
+                     });
                      
                      return (
                        <a
